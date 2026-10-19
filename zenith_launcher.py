@@ -1,5 +1,5 @@
 """
-Zenith Launcher 1.1 - Minecraft launcher (PyQt6, liquid-glass UI)
+Zenith Launcher 1.5 - Minecraft launcher (PyQt6, liquid-glass UI)
 
 Install:   pip install PyQt6 minecraft-launcher-lib requests
 Run:       python zenith_launcher.py
@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSpinBox, QAbstractSpinBox, QFileDialog, QGraphicsOpacityEffect, QSizePolicy)
 
 APP_NAME = "Zenith Launcher"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5"
 # Auto-update: put your public GitHub repo here, e.g. "yourname/zenith-launcher"
 DEFAULT_UPDATE_REPO = "sryaddd/zenith-launcher"
 
@@ -2589,7 +2589,7 @@ class SettingsPage(QWidget):
         ul.addWidget(cb)
         ul.addSpacing(10)
         ul.addWidget(lbl("How to publish an update: build the exe, open your repo on GitHub, go to Releases, "
-                         "create a release with a higher tag (example v1.1.1) and upload ZenithLauncher.exe. "
+                         "create a release with a higher tag (example v1.5.1) and upload ZenithLauncher.exe. "
                          "Every launcher then shows an Update button.", "sub", True))
         ul.addStretch()
         self.stack.addWidget(wrap_scroll(up))
@@ -3328,6 +3328,39 @@ class Main(QMainWindow):
         with z.open(member) as src, open(target, "wb") as out:
             out.write(src.read())
 
+    def make_custom_version(self, name, mc, patches):
+        """Prism/MultiMC patch (tweakers + libraries) theke launcher version json banay (Glide Client etc.)."""
+        d = str(MC_DIR)
+        base_json = MC_DIR / "versions" / mc / f"{mc}.json"
+        if not base_json.exists():
+            mll.install.install_minecraft_version(mc, d)
+        base = json.loads(base_json.read_text(encoding="utf-8"))
+
+        libs, tweakers, main_class = [], [], None
+        for pt in patches:
+            for lib in pt.get("libraries", []):
+                lib = {k: v for k, v in lib.items() if k in ("name", "url", "rules")}
+                if "url" not in lib:
+                    lib["url"] = "https://libraries.minecraft.net/"
+                libs.append(lib)
+            tweakers += pt.get("+tweakers", [])
+            main_class = pt.get("mainClass") or main_class
+
+        vid = f"{safe_name(name)}-{mc}"
+        data = {"id": vid, "inheritsFrom": mc, "type": "release",
+                "releaseTime": "2017-06-08T04:26:33+00:00", "time": "2017-06-08T04:26:33+00:00",
+                "mainClass": main_class or "net.minecraft.launchwrapper.Launch",
+                "libraries": libs}
+        if "minecraftArguments" in base:
+            data["minecraftArguments"] = base["minecraftArguments"] + "".join(f" --tweakClass {t}" for t in tweakers)
+        else:
+            data["arguments"] = {"game": [x for t in tweakers for x in ("--tweakClass", t)]}
+
+        vdir = MC_DIR / "versions" / vid
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / f"{vid}.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return vid
+
     def import_pack(self, path, name_hint=None):
         latest = next((v["id"] for v in self.all_versions if v["type"] == "release"), "1.21.1")
         name = name_hint or path.stem
@@ -3362,9 +3395,23 @@ class Main(QMainWindow):
                             self._extract(z, n, pdir, n[len(pre):])
                 return prof
             mmc = next((n for n in names if n.endswith("mmc-pack.json")), None)
+            patches = []
             if mmc:
                 mc, loader = parse_mmc(json.loads(z.read(mmc)).get("components", []))
+                prefix = mmc[:-len("mmc-pack.json")]
+                for n in names:
+                    if n.startswith(prefix + "patches/") and n.endswith(".json"):
+                        try:
+                            patches.append(json.loads(z.read(n)))
+                        except Exception:
+                            pass
+            patches = [pt for pt in patches if pt.get("uid") not in
+                       ("net.minecraft", "net.minecraftforge", "net.fabricmc.fabric-loader",
+                        "org.quiltmc.quilt-loader", "net.fabricmc.intermediary")]
             prof = self.make_profile(name, mc or latest, loader)
+            if patches:
+                self.status("Preparing custom client version...")
+                prof["version_id"] = self.make_custom_version(name, mc or latest, patches)
             pdir = Path(prof["dir"])
             root = ""
             for n in names:
@@ -3384,6 +3431,8 @@ class Main(QMainWindow):
                 has_dirs = any(n.split("/")[0] in ("mods", "config", "saves", "resourcepacks", "shaderpacks") for n in members)
                 only_jars = members and all(n.lower().endswith(".jar") for n in members)
                 for n in members:
+                    if n.startswith("patches/") or n.endswith("mmc-pack.json"):
+                        continue
                     if not has_dirs and only_jars:
                         self._extract(z, n, pdir, "mods/" + os.path.basename(n))
                     else:
@@ -3658,7 +3707,14 @@ class Main(QMainWindow):
                   "setMax": lambda m: state.__setitem__("max", m)}
             s = self.settings
             self.status(f"Preparing {p['loader']} {p['mc']}...")
-            vid = self.ensure_installed(p["mc"], p["loader"], cb)
+            if p.get("version_id"):
+                # Custom client (Glide etc.): libraries (Glide, Optifine, launchwrapper) get downloaded here
+                vid = p["version_id"]
+                if not (MC_DIR / "versions" / vid / f"{vid}.json").exists():
+                    raise Exception("Custom client version file is missing. Delete this profile and import the zip again.")
+                mll.install.install_minecraft_version(vid, str(MC_DIR), callback=cb)
+            else:
+                vid = self.ensure_installed(p["mc"], p["loader"], cb)
             gdir = game_dir(p)
             opts = {
                 "username": s["username"],
