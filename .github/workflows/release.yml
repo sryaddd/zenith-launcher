@@ -1,0 +1,64 @@
+
+name: Build and Publish Zenith Launcher
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyQt6 requests minecraft-launcher-lib pyinstaller
+
+      - name: Verify version
+        shell: pwsh
+        run: |
+          $src = Get-Content zenith_launcher.py -Raw
+          if ($src -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') {
+            throw "APP_VERSION not found"
+          }
+          $version = $Matches[1]
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}".TrimStart("v")
+            if ($version -ne $tag) {
+              throw "Source version $version does not match tag $tag"
+            }
+          }
+          Write-Host "Building version $version"
+
+      - name: Build EXE
+        run: >
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name ZenithLauncher
+          --collect-all PyQt6
+          --collect-all minecraft_launcher_lib
+          zenith_launcher.py
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ZenithLauncher.exe
+          generate_release_notes: true
