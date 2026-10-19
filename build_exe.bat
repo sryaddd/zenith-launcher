@@ -1,4 +1,4 @@
-"""
+
 Zenith Launcher 1.1 - Minecraft launcher (PyQt6, liquid-glass UI)
 
 Install:   pip install PyQt6 minecraft-launcher-lib requests
